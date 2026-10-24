@@ -11,7 +11,8 @@ import { Units } from "../units";
 import { arraysEqual, checkArrayType } from "../util";
 import LogField from "./LogField";
 import LogFieldTree from "./LogFieldTree";
-import { PHOTON_PREFIX, STRUCT_PREFIX, TYPE_KEY, applyKeyPrefix, getEnabledData, splitLogKey } from "./LogUtil";
+import { PHOTON_PREFIX, STRUCT_PREFIX, applyKeyPrefix, getSchemaType, splitLogKey } from "./LogKeyUtils";
+import { TYPE_KEY } from "./LogUtil";
 import {
   LogValueSetAny,
   LogValueSetBoolean,
@@ -25,6 +26,7 @@ import {
 import LoggableType from "./LoggableType";
 import PhotonStructDecoder from "./PhotonStructDecoder";
 import ProtoDecoder from "./ProtoDecoder";
+import { getEnabledData } from "./RobotState";
 import StructDecoder from "./StructDecoder";
 
 /** Represents a collection of log fields. */
@@ -38,6 +40,7 @@ export default class Log {
   private fields: { [id: string]: LogField } = {};
   private generatedParents: Set<string> = new Set(); // Children of these fields are generated
   private timestampRange: [number, number] | null = null;
+  private timestampZero: number | null = null;
   private enableTimestampSetCache: boolean;
   private timestampSetCache: { [id: string]: { keys: string[]; timestamps: number[]; sourceCounts: number[] } } = {};
   private changedFields: Set<string> = new Set();
@@ -109,7 +112,7 @@ export default class Log {
   }
 
   /** Clears all data before the provided timestamp. */
-  clearBeforeTime(timestamp: number) {
+  clearBeforeTime(timestamp: number, updateZero = true) {
     if (this.timestampRange === null) {
       this.timestampRange = [timestamp, timestamp];
     } else if (this.timestampRange[0] < timestamp) {
@@ -117,6 +120,9 @@ export default class Log {
       if (this.timestampRange[1] < this.timestampRange[0]) {
         this.timestampRange[1] = this.timestampRange[0];
       }
+    }
+    if (updateZero && (this.timestampZero === null || this.timestampZero < timestamp)) {
+      this.timestampZero = timestamp;
     }
     Object.values(this.timestampSetCache).forEach((cache) => {
       while (cache.timestamps.length >= 2 && cache.timestamps[1] <= timestamp) {
@@ -139,6 +145,9 @@ export default class Log {
       this.timestampRange[0] = timestamp;
     } else if (timestamp > this.timestampRange[1]) {
       this.timestampRange[1] = timestamp;
+    }
+    if (this.timestampZero === null || timestamp < this.timestampZero) {
+      this.timestampZero = timestamp;
     }
   }
 
@@ -284,7 +293,7 @@ export default class Log {
       });
       if (structType !== null) {
         let structUnitInfo = Units.STRUCT_UNITS[structType];
-        if (structUnitInfo !== undefined) {
+        if (structUnitInfo !== undefined && structChildKey in structUnitInfo) {
           return structUnitInfo[structChildKey];
         }
       }
@@ -326,7 +335,7 @@ export default class Log {
     // Apply cache
     if (!(key in this.fields)) return null;
     if (this.fields[key].getType() !== LoggableType.Number) return null;
-    if (!(key in this.fieldUnitCache)) this.fieldUnitCache[key] = getUnitImpl();
+    if (!(key in this.fieldUnitCache)) this.fieldUnitCache[key] = getUnitImpl() ?? null;
     return this.fieldUnitCache[key];
   }
 
@@ -416,6 +425,19 @@ export default class Log {
     }
   }
 
+  /** Returns the value to add to timestamps before displaying them. */
+  getTimestampDisplayOffset(): number {
+    if (window.preferences) {
+      switch (window.preferences.timestamps) {
+        case "start-zero":
+          return -(this.timestampZero ?? 0);
+        case "original":
+          return 0;
+      }
+    }
+    return 0;
+  }
+
   /** Returns the most recent timestamp across all fields. */
   getLastTimestamp(): number {
     let timestamps = this.getTimestamps(this.getFieldKeys());
@@ -437,7 +459,9 @@ export default class Log {
         }
         position = position.children[table];
       });
-      position.fullKey = key;
+      if (position.fullKey === null || !key.endsWith("/")) {
+        position.fullKey = key;
+      }
     });
     return root;
   }
@@ -547,14 +571,17 @@ export default class Log {
     }
 
     // Check for struct schema
-    if (key.includes("/.schema/" + STRUCT_PREFIX)) {
-      this.structDecoder.addSchema(key.split(STRUCT_PREFIX)[1], value);
-      this.photonDecoder.addSchema(key.split(STRUCT_PREFIX)[1], value);
-      this.attemptQueuedStructures();
-    }
-    if (key.includes("/.schema/" + PHOTON_PREFIX)) {
-      this.photonDecoder.addSchema(key.split(PHOTON_PREFIX)[1], value);
-      this.attemptQueuedStructures();
+    let schemaType = getSchemaType(key);
+    if (schemaType !== null) {
+      if (schemaType.startsWith(STRUCT_PREFIX)) {
+        this.structDecoder.addSchema(schemaType.slice(STRUCT_PREFIX.length), value);
+        this.photonDecoder.addSchema(schemaType.slice(STRUCT_PREFIX.length), value);
+        this.attemptQueuedStructures();
+      }
+      if (schemaType.startsWith(PHOTON_PREFIX)) {
+        this.photonDecoder.addSchema(schemaType.slice(PHOTON_PREFIX.length), value);
+        this.attemptQueuedStructures();
+      }
     }
   }
 
@@ -975,10 +1002,15 @@ export default class Log {
         (timestamp) => timestamp + offset
       );
     }
+    if (sourceSerialized.timestampZero !== null && sourceSerialized.timestampZero !== undefined) {
+      sourceSerialized.timestampZero += offset;
+    }
 
     // Merge fields
     Object.entries(sourceSerialized.fields).forEach(([key, value]) => {
-      this.fields[applyKeyPrefix(prefix, key)] = LogField.fromSerialized(value);
+      let targetKey = applyKeyPrefix(prefix, key);
+      if (prefix.length > 0 && targetKey === prefix) return;
+      this.fields[targetKey] = LogField.fromSerialized(value);
     });
 
     // Merge generated parents
@@ -997,6 +1029,13 @@ export default class Log {
         ];
       }
     }
+    if (sourceSerialized.timestampZero !== null && sourceSerialized.timestampZero !== undefined) {
+      if (this.timestampZero === null) {
+        this.timestampZero = sourceSerialized.timestampZero;
+      } else {
+        this.timestampZero = Math.min(this.timestampZero, sourceSerialized.timestampZero);
+      }
+    }
 
     // Merge struct & proto data
     this.structDecoder = StructDecoder.fromSerialized({
@@ -1010,6 +1049,9 @@ export default class Log {
       }
     });
     let protoDescriptors: any[] = [];
+    this.protoDecoder.toSerialized().forEach((descriptor: any) => {
+      protoDescriptors.push(descriptor);
+    });
     sourceSerialized.protoDecoder.forEach((descriptor: any) => {
       protoDescriptors.push(descriptor);
     });
@@ -1023,6 +1065,7 @@ export default class Log {
       fields: {},
       generatedParents: Array.from(this.generatedParents),
       timestampRange: this.timestampRange,
+      timestampZero: this.timestampZero,
       structDecoder: this.structDecoder.toSerialized(),
       protoDecoder: this.protoDecoder.toSerialized(),
       queuedStructs: this.queuedStructs,
@@ -1043,6 +1086,7 @@ export default class Log {
     });
     log.generatedParents = new Set(serializedData.generatedParents);
     log.timestampRange = serializedData.timestampRange;
+    log.timestampZero = serializedData.timestampZero !== undefined ? serializedData.timestampZero : null;
     log.structDecoder = StructDecoder.fromSerialized(serializedData.structDecoder);
     log.protoDecoder = ProtoDecoder.fromSerialized(serializedData.protoDecoder);
     log.queuedStructs = serializedData.queuedStructs;

@@ -6,10 +6,12 @@
 // at the root directory of this project.
 
 import TinyPopupMenu, { MenuItem, Submenu } from "tiny-popup-menu";
+import WorkerManager from "../../hub/WorkerManager";
 import { AdvantageScopeAssets } from "../../shared/AdvantageScopeAssets";
 import { BUILD_DATE, COPYRIGHT, Distribution, DISTRIBUTION, LITE_VERSION } from "../../shared/buildConstants";
 import ButtonRect from "../../shared/ButtonRect";
 import { ensureThemeContrast } from "../../shared/Colors";
+import { Field2dCameraMode } from "../../shared/Field2dCameraMode";
 import { HubState } from "../../shared/HubState";
 import LineGraphFilter from "../../shared/LineGraphFilter";
 import NamedMessage from "../../shared/NamedMessage";
@@ -176,7 +178,7 @@ function openSourceListHelp(config: SourceListConfig) {
 /** Opens a popup window for preferences. */
 function openPreferences() {
   const width = 400;
-  const optionRows = 7;
+  const optionRows = 8;
   const titleRows = 2;
   const height = optionRows * 27 + titleRows * 34 + 54;
   openPopupWindow("www/preferences.html", [width, height], "pixels", (message) => {
@@ -304,6 +306,20 @@ async function initHub() {
   });
   hubPort.start();
 
+  // Propagate the hub's title to the parent tab
+  const hubTitleElement = HUB_FRAME.contentDocument?.querySelector("title");
+  if (hubTitleElement) {
+    const syncTitle = () => {
+      if (hubTitleElement.textContent) document.title = hubTitleElement.textContent;
+    };
+    new MutationObserver(syncTitle).observe(hubTitleElement, {
+      childList: true,
+      characterData: true,
+      subtree: true
+    });
+    syncTitle();
+  }
+
   // Init messages
   sendMessage(hubPort, "set-version", {
     platform: "lite",
@@ -360,6 +376,10 @@ async function handleHubMessage(message: NamedMessage) {
       HUB_FRAME.style.opacity = "100%";
       break;
 
+    case "open-files-request":
+      sendMessage(hubPort, "open-files", { files: message.data.files, merge: false });
+      break;
+
     case "alert":
     case "error":
       window.alert(message.data.content);
@@ -367,6 +387,7 @@ async function handleHubMessage(message: NamedMessage) {
 
     case "save-state":
       localStorage.setItem(LocalStorageKeys.STATE, JSON.stringify(message.data));
+      localStorage.setItem(LocalStorageKeys.SIDEBAR_WIDTH, JSON.stringify(message.data.sidebar.width));
       break;
 
     case "save-type-memory":
@@ -406,6 +427,16 @@ async function handleHubMessage(message: NamedMessage) {
         const uuid: string = message.data.uuid;
         const path: string = message.data.path;
 
+        let extension = path.split(".").pop();
+        if (extension === "hoot" || extension === "revlog") {
+          sendMessage(hubPort, "historical-data", {
+            files: [null],
+            error: "Unsupported file format in AdvantageScope Lite.",
+            uuid: uuid
+          });
+          break;
+        }
+
         let prefs = DEFAULT_PREFS;
         let prefsRaw = localStorage.getItem(LocalStorageKeys.PREFS);
         if (prefsRaw !== null) mergePreferences(prefs, JSON.parse(prefsRaw));
@@ -413,12 +444,45 @@ async function handleHubMessage(message: NamedMessage) {
         let response = await fetch(`logs/${encodeURIComponent(path)}?folder=${encodeURIComponent(prefs.remotePath)}`);
         let buffer = await response.arrayBuffer();
         let array = new Uint8Array(buffer);
+        let error: string | null = null;
+        if (extension === "wpilogxz") {
+          array = await WorkerManager.request("bundles/xzWorker.js", array);
+          if (array.length === 0) error = "Failed to decompress WPILOG file.";
+        }
 
         sendMessage(hubPort, "historical-data", {
           files: [array],
-          error: null,
+          error: error,
           uuid: uuid
         });
+      }
+      break;
+
+    case "historical-start-raw":
+      {
+        const uuid: string = message.data.uuid;
+        const extension: string = message.data.extension;
+
+        if (extension === "hoot" || extension === "revlog") {
+          sendMessage(hubPort, "historical-data", {
+            files: [null],
+            error: "Unsupported file format in AdvantageScope Lite.",
+            uuid: uuid
+          });
+        } else if (extension === "wpilogxz") {
+          const decompressed = await WorkerManager.request("bundles/xzWorker.js", message.data.data);
+          sendMessage(hubPort, "historical-data", {
+            files: [decompressed],
+            error: decompressed.length === 0 ? "Failed to decompress WPILOG file." : null,
+            uuid: uuid
+          });
+        } else {
+          sendMessage(hubPort, "historical-data", {
+            files: [message.data.data],
+            error: null,
+            uuid: uuid
+          });
+        }
       }
       break;
 
@@ -428,6 +492,9 @@ async function handleHubMessage(message: NamedMessage) {
 
     case "ask-open-sidebar-context-menu":
       // Sidebar context menu is currently not implemented in the Lite version since the only current options require HTTPS APIs (navigator.clipboard APIs).
+      break;
+
+    case "ask-open-tuning-context-menu":
       break;
 
     case "open-app-menu":
@@ -1260,6 +1327,35 @@ async function handleHubMessage(message: NamedMessage) {
             }
           });
         });
+        openMenu({ x: position[0], y: position[1], width: 0, height: 0 }, menuItems);
+      }
+      break;
+
+    case "ask-2d-camera":
+      {
+        let position: [number, number] = message.data.position;
+        let selectedIndex: Field2dCameraMode = message.data.selectedIndex;
+        let menuItems: (MenuItem | Submenu | "-")[] = [
+          {
+            content: (selectedIndex === Field2dCameraMode.Unlocked ? "\u2714 " : "") + "Unlocked",
+            callback() {
+              sendMessage(hubPort, "set-2d-camera", Field2dCameraMode.Unlocked);
+            }
+          },
+          {
+            content: (selectedIndex === Field2dCameraMode.Robot ? "\u2714 " : "") + "Locked to Robot",
+            callback() {
+              sendMessage(hubPort, "set-2d-camera", Field2dCameraMode.Robot);
+            }
+          },
+          {
+            content:
+              (selectedIndex === Field2dCameraMode.RobotAndRotation ? "\u2714 " : "") + "Locked to Robot & Rotation",
+            callback() {
+              sendMessage(hubPort, "set-2d-camera", Field2dCameraMode.RobotAndRotation);
+            }
+          }
+        ];
         openMenu({ x: position[0], y: position[1], width: 0, height: 0 }, menuItems);
       }
       break;

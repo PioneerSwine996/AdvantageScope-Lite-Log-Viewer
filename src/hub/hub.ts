@@ -13,7 +13,8 @@ import Selection from "../shared/Selection";
 import { SourceListItemState, SourceListTypeMemory } from "../shared/SourceListConfig";
 import { Distribution, DISTRIBUTION, IS_LITE } from "../shared/buildConstants";
 import Log from "../shared/log/Log";
-import { AKIT_TIMESTAMP_KEYS, getEnabledData, MERGE_PREFIX } from "../shared/log/LogUtil";
+import { MERGE_PREFIX } from "../shared/log/LogKeyUtils";
+import { AKIT_TIMESTAMP_KEYS, getEnabledData } from "../shared/log/RobotState";
 import { calcMockProgress, clampValue, htmlEncode, scaleValue } from "../shared/util";
 import SelectionImpl from "./SelectionImpl";
 import Sidebar from "./Sidebar";
@@ -115,7 +116,12 @@ let dragData: any = null;
 // WINDOW UTILITIES
 
 function setWindowTitle(name: string, status?: string) {
-  let title = htmlEncode(name) + (status ? " (" + htmlEncode(status) + ")" : "") + " &mdash; AdvantageScope";
+  let title =
+    htmlEncode(name) +
+    (status ? " (" + htmlEncode(status) + ")" : "") +
+    " &mdash; AdvantageScope" +
+    (IS_LITE ? " Lite" : "") +
+    (DISTRIBUTION === Distribution.LiteDS ? " (DS)" : "");
   document.getElementsByTagName("title")[0].innerHTML = title;
   document.getElementsByClassName("title-bar-text")[0].innerHTML = title;
 }
@@ -511,9 +517,7 @@ document.addEventListener("drop", (event) => {
       files.push(window.electron.getFilePath(file));
     }
     if (files.length > 0) {
-      files.forEach((file, index) => {
-        startHistorical(file, index === 0, files.length > 1);
-      });
+      window.sendMainMessage("open-files-request", { files: files });
     }
   }
 });
@@ -906,6 +910,10 @@ async function handleMainMessage(message: NamedMessage) {
       window.tabs.set3DCamera(message.data);
       break;
 
+    case "set-2d-camera":
+      window.tabs.set2DCamera(message.data);
+      break;
+
     case "edit-fov":
       window.tabs.setFov(message.data);
       break;
@@ -960,34 +968,32 @@ async function handleMainMessage(message: NamedMessage) {
       // Load missing fields
       await Promise.all(historicalSources.map((entry) => entry.source.loadAllFields()));
 
-      // Convert to export format
-      WorkerManager.request(
-        "../bundles/exportWorker.js",
-        {
-          options: message.data.options,
-          log: window.log.toSerialized()
-        },
-        (progress: number) => {
-          clearInterval(mockProgressInterval);
-          setLoading(scaleValue(progress, [0, 1], [mockProgress, 1]));
-        }
-      )
-        .then((content) => {
-          window.sendMainMessage("write-export", {
-            path: message.data.path,
-            content: content
-          });
-        })
-        .catch(() => {
-          window.sendMainMessage("error", {
-            title: "Failed to export data",
-            content: "There was a problem while converting to the export format. Please try again."
-          });
-          setLoading(null);
-        })
-        .finally(() => {
-          setExporting(false);
+      try {
+        // Convert to export format
+        const content = await WorkerManager.request(
+          "../bundles/exportWorker.js",
+          {
+            options: message.data.options,
+            log: window.log.toSerialized()
+          },
+          (progress: number) => {
+            clearInterval(mockProgressInterval);
+            setLoading(scaleValue(progress, [0, 1], [mockProgress, 1]));
+          }
+        );
+        window.sendMainMessage("write-export", {
+          path: message.data.path,
+          content: content
         });
+      } catch {
+        window.sendMainMessage("error", {
+          title: "Failed to export data",
+          content: "There was a problem while converting to the export format. Please try again."
+        });
+        setLoading(null);
+      } finally {
+        setExporting(false);
+      }
       break;
 
     case "finish-export":

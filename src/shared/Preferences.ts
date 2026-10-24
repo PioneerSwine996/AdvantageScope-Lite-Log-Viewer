@@ -28,11 +28,13 @@ export default interface Preferences {
   systemcoreStaticAddress: "" | "usb" | "wifi";
   hasScrolledLineGraph: boolean;
   hasScrolledTimeline: boolean;
+  prefersFTC: boolean;
+  timestamps: "start-zero" | "original";
 }
 
 export const DEFAULT_PREFS: Preferences = {
   theme: "system",
-  robotAddress: "10.00.00.2",
+  robotAddress: "robot.local",
   remotePath: "/U/logs",
   liveMode: "nt4",
   liveSubscribeMode: "low-bandwidth",
@@ -49,7 +51,9 @@ export const DEFAULT_PREFS: Preferences = {
   ctreLicenseAccepted: false,
   systemcoreStaticAddress: "",
   hasScrolledLineGraph: false,
-  hasScrolledTimeline: false
+  hasScrolledTimeline: false,
+  prefersFTC: false,
+  timestamps: "start-zero"
 };
 
 export const DEFAULT_PREFS_LITEDS: Preferences = Object.assign({}, DEFAULT_PREFS, {
@@ -202,6 +206,12 @@ export function mergePreferences(basePrefs: Preferences, newPrefs: object) {
   }
   if ("hasScrolledTimeline" in newPrefs && typeof newPrefs.hasScrolledTimeline === "boolean") {
     basePrefs.hasScrolledTimeline = newPrefs.hasScrolledTimeline;
+  }
+  if ("prefersFTC" in newPrefs && typeof newPrefs.prefersFTC === "boolean") {
+    basePrefs.prefersFTC = newPrefs.prefersFTC;
+  }
+  if ("timestamps" in newPrefs && (newPrefs.timestamps === "start-zero" || newPrefs.timestamps === "original")) {
+    basePrefs.timestamps = newPrefs.timestamps;
   }
 }
 
