@@ -237,6 +237,31 @@ function openDownload() {
   });
 }
 
+/** Prompts for log files and uploads them to the server's log folder. */
+function uploadLog() {
+  let input = document.createElement("input");
+  input.type = "file";
+  input.accept = ".wpilog,.rlog,.log";
+  input.multiple = true;
+  input.addEventListener("change", async () => {
+    if (input.files === null || input.files.length === 0) return;
+    let formData = new FormData();
+    Array.from(input.files).forEach((file) => formData.append("file", file));
+    try {
+      let response = await fetch("uploadLog", { method: "POST", body: formData });
+      if (!response.ok) {
+        window.alert("Upload failed: " + response.statusText);
+        return;
+      }
+    } catch (e) {
+      window.alert("Upload failed: " + String(e));
+      return;
+    }
+    openDownload();
+  });
+  input.click();
+}
+
 /** Opens a popup window for uploading assets. */
 async function openUploadAsset() {
   let port = await openPopupWindow("www/uploadAsset.html", [360, 120], "pixels", async () => {
@@ -433,6 +458,12 @@ async function handleHubMessage(message: NamedMessage) {
                 content: `Open Log (\u21e7 ${modifier} O)`,
                 callback() {
                   openDownload();
+                }
+              },
+              {
+                content: "Upload Log",
+                callback() {
+                  uploadLog();
                 }
               },
               {
