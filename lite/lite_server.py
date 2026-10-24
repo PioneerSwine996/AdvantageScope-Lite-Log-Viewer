@@ -121,6 +121,17 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             body = json.dumps(replay.get_status()).encode("utf-8")
             self._send_response_with_compression(200, "application/json", body)
 
+        # Serve the robot code's AdvantageScope layout
+        elif request.path == WEBROOT + "/robotLayout":
+            if ROBOT_REPO is None:
+                self.send_error(400, "Server was started without --robot-repo")
+                return
+            layout = replay.read_latest_layout(ROBOT_REPO)
+            if layout is None:
+                self.send_error(404, f"No {replay.LAYOUT_FILE} found in robot repository")
+                return
+            self._send_response_with_compression(200, "application/json", layout.encode("utf-8"))
+
         # Serve list of logs
         elif request.path == WEBROOT + "/logs" or request.path == WEBROOT + "/logs/":
             files = []

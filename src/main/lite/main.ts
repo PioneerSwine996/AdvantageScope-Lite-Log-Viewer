@@ -262,6 +262,29 @@ function uploadLog() {
   input.click();
 }
 
+/** Applies the latest AdvantageScope layout from the robot code repository on the server. */
+async function loadRobotLayout() {
+  let layout: any;
+  try {
+    let response = await fetch("robotLayout");
+    if (!response.ok) {
+      window.alert("Failed to load robot layout: " + response.statusText);
+      return;
+    }
+    layout = await response.json();
+  } catch (e) {
+    window.alert("Failed to load robot layout: " + String(e));
+    return;
+  }
+
+  // Lite has a single hub, so only the first hub window's state applies
+  if (!Array.isArray(layout?.hubs) || layout.hubs.length === 0 || !("state" in layout.hubs[0])) {
+    window.alert("Failed to load robot layout: The layout file was not a recognized format.");
+    return;
+  }
+  sendMessage(hubPort, "restore-state", layout.hubs[0].state);
+}
+
 /** Opens a popup window for uploading assets. */
 async function openUploadAsset() {
   let port = await openPopupWindow("www/uploadAsset.html", [360, 120], "pixels", async () => {
@@ -464,6 +487,12 @@ async function handleHubMessage(message: NamedMessage) {
                 content: "Upload Log",
                 callback() {
                   uploadLog();
+                }
+              },
+              {
+                content: "Load Robot Layout",
+                callback() {
+                  loadRobotLayout();
                 }
               },
               {

@@ -16,6 +16,7 @@ import subprocess
 import threading
 
 GRADLE_TASK = "runReplay"
+LAYOUT_FILE = "AdvantageScope.json"
 SHA_PATTERN = re.compile(r"^[0-9a-fA-F]{7,40}$")
 WORKTREE_PATH = os.path.abspath("replay_worktree")
 
@@ -86,8 +87,23 @@ def start(repo, log_path, sha):
     return None
 
 
-def _git(*args, cwd):
-    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
+def _git(*args, cwd, timeout=None):
+    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, timeout=timeout)
+
+
+def read_latest_layout(repo):
+    """Returns the AdvantageScope layout from the remote's default branch, or None if not found."""
+    try:
+        _git("fetch", "--quiet", cwd=repo, timeout=15)
+    except subprocess.TimeoutExpired:
+        pass  # Offline, fall back to what's already fetched
+
+    # Prefer the remote's default branch, then the local checkout
+    for ref in ("origin/HEAD", "HEAD"):
+        result = _git("show", f"{ref}:{LAYOUT_FILE}", cwd=repo)
+        if result.returncode == 0:
+            return result.stdout
+    return None
 
 
 def _run(repo, log_path, sha):

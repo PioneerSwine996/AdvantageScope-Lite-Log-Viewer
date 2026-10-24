@@ -100,6 +100,9 @@ with open(os.path.join(REPO_DIR, "gradlew"), "w") as f:
         'echo "> Task :simulateJava"\ncp "$AKIT_LOG_PATH" "${AKIT_LOG_PATH%.wpilog}_sim.wpilog"\n'
     )
 os.chmod(os.path.join(REPO_DIR, "gradlew"), 0o755)
+LAYOUT = {"hubs": [{"state": {"tabs": []}}], "satellites": [], "version": "26.0.0"}
+with open(os.path.join(REPO_DIR, "AdvantageScope.json"), "w") as f:
+    json.dump(LAYOUT, f)
 git("init", "--quiet")
 git("add", ".")
 git("commit", "--quiet", "-m", "Initial")
@@ -125,6 +128,8 @@ server = subprocess.Popen(
 time.sleep(1.5)
 
 try:
+    check("layout served from repo", request("/robotLayout"), (200, LAYOUT))
+
     check("idle before replay", request("/replayStatus")[1]["state"], "idle")
 
     check("automatic hash accepted", request("/replay", {"name": "match.wpilog", "sha": None})[0], 202)
