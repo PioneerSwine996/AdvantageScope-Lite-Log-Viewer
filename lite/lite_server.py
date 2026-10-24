@@ -28,6 +28,21 @@ ENABLE_FILESYSTEM_ACCESS = IS_SYSTEMCORE or "--enable-file-access" in sys.argv
 WEBROOT = ""
 
 
+def parse_arg(argv, name):
+    """Reads the value of a "--name value" or "--name=value" argument, or None."""
+    for i, arg in enumerate(argv):
+        if arg == name and i + 1 < len(argv):
+            return argv[i + 1]
+        if arg.startswith(name + "="):
+            return arg[len(name) + 1:]
+    return None
+
+
+# All logs are listed from, served from, and uploaded to this folder. The client's
+# "folder" query parameter is ignored, since it is untrusted.
+LOG_DIR = os.path.abspath(parse_arg(sys.argv, "--log-dir") or ("/U/logs" if IS_SYSTEMCORE else "logs"))
+
+
 class Handler(http.server.SimpleHTTPRequestHandler):
     def _send_response_with_compression(self, status_code, content_type, source_data):
         """Sends a response, compressing it with gzip if the client supports it."""
@@ -99,28 +114,27 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         elif request.path == WEBROOT + "/logs" or request.path == WEBROOT + "/logs/":
             files = []
             if ENABLE_FILESYSTEM_ACCESS:
-                if "folder" in query and len(query["folder"]) > 0:
-                    folder_path = query["folder"][0]
-                    if not os.path.exists(folder_path) or not os.path.isdir(folder_path):
-                        self.send_error(404, "Requested folder does not exist")
-                        return
-                    for filename in [x for x in os.listdir(folder_path) if not x.startswith(".")]:
-                        for suffix in ALLOWED_LOG_SUFFIXES:
-                            if filename.endswith(suffix):
-                                files.append({
-                                    "name": filename,
-                                    "size": os.path.getsize(os.path.join(folder_path, filename))
-                                })
-                                break
+                if not os.path.isdir(LOG_DIR):
+                    self.send_error(404, "Log folder does not exist")
+                    return
+                for filename in [x for x in os.listdir(LOG_DIR) if not x.startswith(".")]:
+                    for suffix in ALLOWED_LOG_SUFFIXES:
+                        if filename.endswith(suffix):
+                            files.append({
+                                "name": filename,
+                                "size": os.path.getsize(os.path.join(LOG_DIR, filename))
+                            })
+                            break
             json_string = json.dumps(files, separators=(',', ':'))
             self._send_response_with_compression(200, "application/json", json_string.encode("utf-8"))
 
         # Serve log file
         elif request.path.startswith(WEBROOT + "/logs"):
-            if ENABLE_FILESYSTEM_ACCESS and "folder" in query and len(query["folder"]) > 0:
-                filename = urllib.parse.unquote(request.path[len(WEBROOT + "/logs/"):])
+            if ENABLE_FILESYSTEM_ACCESS:
+                # basename() keeps requests inside LOG_DIR
+                filename = os.path.basename(urllib.parse.unquote(request.path[len(WEBROOT + "/logs/"):]))
                 if any(filename.endswith(suffix) for suffix in ALLOWED_LOG_SUFFIXES):
-                    full_path = os.path.join(query["folder"][0], filename)
+                    full_path = os.path.join(LOG_DIR, filename)
                     if os.path.exists(full_path):
                         try:
                             with open(full_path, 'rb') as f:
@@ -155,9 +169,72 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             else:
                 self.send_error(404, f"File not found: {self.path}")
 
+    def _send_status(self, code, message=None):
+        """Sends a bare response, using "message" as the HTTP reason phrase."""
+        self.send_response(code, message)
+        self.end_headers()
+
+    def _upload_logs(self):
+        """Saves uploaded log files to LOG_DIR."""
+        if not os.path.isdir(LOG_DIR):
+            self._send_status(500, "Configured log directory does not exist")
+            return
+
+        content_type, options = parse_options_header(self.headers.get("Content-Type", ""))
+        if content_type != "multipart/form-data" or "boundary" not in options:
+            self._send_status(400, "Expected multipart/form-data")
+            return
+
+        parser = MultipartParser(
+            self.rfile, options["boundary"], content_length=int(self.headers.get("Content-Length", -1))
+        )
+        parts = []
+        saved = 0
+        try:
+            for part in parser:
+                parts.append(part)
+                if not part.filename:
+                    continue
+
+                # Discard any directory components supplied by the client so an upload
+                # cannot escape LOG_DIR. Backslashes are normalized first, since
+                # os.path.basename does not treat them as separators on POSIX.
+                filename = os.path.basename(part.filename.replace("\\", "/"))
+                if filename.startswith("."):
+                    # The file listing skips dotfiles, so these would save but never appear
+                    self._send_status(400, "Log name cannot start with a period")
+                    return
+                if not any(filename.endswith(suffix) for suffix in ALLOWED_LOG_SUFFIXES):
+                    self._send_status(400, "Unsupported log file type")
+                    return
+
+                part.save_as(os.path.join(LOG_DIR, filename))
+                saved += 1
+        except Exception as e:
+            self._send_status(500, f"Error saving log: {e}")
+            return
+        finally:
+            # Only close what was actually read, so this never re-parses the stream
+            for part in parts:
+                part.close()
+
+        if saved == 0:
+            self._send_status(400, "No files provided")
+            return
+
+        # Report the destination so the client can show where the log went
+        body = LOG_DIR.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_POST(self):
         request = urllib.parse.urlparse(self.path)
-        if request.path.startswith(WEBROOT + "/uploadAsset") & ENABLE_FILESYSTEM_ACCESS:
+        if request.path.startswith(WEBROOT + "/uploadLog") and ENABLE_FILESYSTEM_ACCESS:
+            self._upload_logs()
+        elif request.path.startswith(WEBROOT + "/uploadAsset") & ENABLE_FILESYSTEM_ACCESS:
             content_type, options = parse_options_header(self.headers.get("Content-Type", ""))
 
             if content_type == "multipart/form-data" and 'boundary' in options:
@@ -216,7 +293,12 @@ if __name__ == "__main__":
 
     # Warn if filesystem access disabled
     if not ENABLE_FILESYSTEM_ACCESS:
-        print("Log downloads and custom asset uploads are currently disabled. Pass \"--enable-file-access\" to override.\nWARNING: When enabled, AdvantageScope Lite provides unrestricted access to all log files on the host filesystem and upload access to the ascope_assets folder.\n")
+        print("Log downloads and custom asset uploads are currently disabled. Pass \"--enable-file-access\" to override.\nWARNING: When enabled, AdvantageScope Lite provides read and upload access to the log folder and upload access to the ascope_assets folder.\n")
+
+    # Create log folder
+    if ENABLE_FILESYSTEM_ACCESS:
+        os.makedirs(LOG_DIR, exist_ok=True)
+        print(f"Logs are stored in: {LOG_DIR} (override with \"--log-dir <path>\")\n")
 
     # Start server
     os.chdir(ROOT)

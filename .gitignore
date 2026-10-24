@@ -122,3 +122,4 @@ build/*
 *.pbxuser
 *.mode1v3
 xcuserdata
+/lite/logs

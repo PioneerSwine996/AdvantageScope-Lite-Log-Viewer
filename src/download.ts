@@ -18,6 +18,8 @@ const PROGRESS_BAR: HTMLProgressElement = document.getElementsByTagName("progres
 const PROGRESS_DETAILS: HTMLElement = document.getElementsByClassName("progress-details")[0] as HTMLElement;
 const EXIT_BUTTON: HTMLElement = document.getElementById("exit") as HTMLElement;
 const DOWNLOAD_BUTTON: HTMLElement = document.getElementById("download") as HTMLElement;
+const UPLOAD_BUTTON: HTMLElement = document.getElementById("upload") as HTMLElement;
+const UPLOAD_INPUT: HTMLInputElement = document.getElementById("upload-input") as HTMLInputElement;
 
 const FILE_ITEM_HEIGHT_PX = 25;
 const BOTTOM_FILLER_MARGIN_PX = 5;
@@ -321,12 +323,58 @@ function save() {
   }
 }
 
+/**
+ * Uploads the selected files to the server's log folder (Lite only). The server
+ * saves them to the folder it was started with, so they appear in the list on
+ * the next refresh and open through the normal path.
+ */
+function upload() {
+  const files = UPLOAD_INPUT.files;
+  if (files === null || files.length === 0) return;
+
+  let formData = new FormData();
+  Array.from(files).forEach((file) => formData.append("file", file));
+
+  let request = new XMLHttpRequest();
+  request.open("POST", "../uploadLog", true);
+  request.upload.onprogress = (event) => {
+    ALERT_TEXT.hidden = true;
+    PROGRESS_BAR.hidden = false;
+    PROGRESS_DETAILS.hidden = false;
+    alertIsError = false;
+    PROGRESS_BAR.value = event.lengthComputable ? event.loaded / event.total : 0;
+    PROGRESS_DETAILS.innerText =
+      "Uploading " +
+      Math.floor(event.loaded / 1e6).toString() +
+      "MB / " +
+      Math.floor(event.total / 1e6).toString() +
+      "MB";
+  };
+  request.onloadend = () => {
+    UPLOAD_INPUT.value = ""; // Reset so the same file can be selected again
+    PROGRESS_BAR.hidden = true;
+    PROGRESS_DETAILS.hidden = true;
+    ALERT_TEXT.hidden = false;
+
+    // Leave false so the message survives the next list refresh
+    alertIsError = false;
+    if (request.status === 200) {
+      ALERT_TEXT.innerText = "Uploaded to " + request.responseText;
+    } else {
+      ALERT_TEXT.innerText = "Upload failed" + (request.statusText.length > 0 ? ": " + request.statusText : "");
+    }
+  };
+  request.send(formData);
+}
+
 // Bind events
 window.addEventListener("resize", updateFiller);
 EXIT_BUTTON.addEventListener("click", () => {
   sendMainMessage("close");
 });
 DOWNLOAD_BUTTON.addEventListener("click", save);
+UPLOAD_BUTTON.addEventListener("click", () => UPLOAD_INPUT.click());
+UPLOAD_INPUT.addEventListener("change", upload);
 window.addEventListener("keydown", (event) => {
   if (event.code === "Enter") {
     save();
@@ -351,4 +399,8 @@ window.addEventListener("keydown", (event) => {
 window.addEventListener("load", () => {
   (DOWNLOAD_BUTTON.children[0] as HTMLElement).hidden = IS_LITE;
   (DOWNLOAD_BUTTON.children[1] as HTMLElement).hidden = !IS_LITE;
+
+  // Uploads require the Lite server, so hide the button everywhere else
+  UPLOAD_BUTTON.hidden = !IS_LITE;
+  if (IS_LITE) document.body.classList.add("lite");
 });

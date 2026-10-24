@@ -197,3 +197,18 @@ button {
 #download {
   right: 8px;
 }
+
+#upload {
+  right: 78px;
+}
+
+/* Reserve room for the upload button, which is only shown in Lite */
+
+body.lite div.alert-text {
+  right: 120px;
+}
+
+body.lite progress,
+body.lite div.progress-details {
+  width: calc(100% - 12px - 120px);
+}
