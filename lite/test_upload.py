@@ -77,6 +77,7 @@ with open("lite_server.py") as source:
 server = subprocess.Popen(
     [sys.executable, server_path, "--enable-file-access", "--log-dir", LOG_DIR],
     cwd=os.path.dirname(os.path.abspath(__file__)),
+    env=dict(os.environ, PYTHONPATH=os.path.dirname(os.path.abspath(__file__))),  # Finds replay.py
     stdout=subprocess.DEVNULL,
     stderr=subprocess.STDOUT,
 )

@@ -16,6 +16,7 @@ import urllib
 import gzip
 import zipfile
 
+import replay
 from multipart import parse_options_header, MultipartParser
 
 PORT = 5808
@@ -41,6 +42,11 @@ def parse_arg(argv, name):
 # All logs are listed from, served from, and uploaded to this folder. The client's
 # "folder" query parameter is ignored, since it is untrusted.
 LOG_DIR = os.path.abspath(parse_arg(sys.argv, "--log-dir") or ("/U/logs" if IS_SYSTEMCORE else "logs"))
+
+# Robot code repository used for log replay, which is disabled when unset
+ROBOT_REPO = parse_arg(sys.argv, "--robot-repo")
+if ROBOT_REPO is not None:
+    ROBOT_REPO = os.path.abspath(ROBOT_REPO)
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):
@@ -109,6 +115,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                         self.send_error(500, f"Error serving file: {e}")
                     return
             self.send_error(404, f"File not found: {request.path}")
+
+        # Serve replay status
+        elif request.path == WEBROOT + "/replayStatus":
+            body = json.dumps(replay.get_status()).encode("utf-8")
+            self._send_response_with_compression(200, "application/json", body)
 
         # Serve list of logs
         elif request.path == WEBROOT + "/logs" or request.path == WEBROOT + "/logs/":
@@ -230,10 +241,35 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _start_replay(self):
+        """Starts replaying a log from LOG_DIR. Expects JSON with "name" and an optional "sha"."""
+        if ROBOT_REPO is None:
+            self._send_status(400, "Server was started without --robot-repo")
+            return
+        try:
+            body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
+            filename = os.path.basename(str(body["name"]))
+            sha = body.get("sha")
+        except Exception:
+            self._send_status(400, "Invalid replay request")
+            return
+        log_path = os.path.join(LOG_DIR, filename)
+        if not filename.endswith(".wpilog") or not os.path.isfile(log_path):
+            self._send_status(400, "Replay requires a WPILOG file from the log folder")
+            return
+        if sha is not None and not replay.SHA_PATTERN.match(str(sha)):
+            self._send_status(400, "Invalid Git hash")
+            return
+
+        error = replay.start(ROBOT_REPO, log_path, sha)
+        self._send_status(409 if error else 202, error)
+
     def do_POST(self):
         request = urllib.parse.urlparse(self.path)
         if request.path.startswith(WEBROOT + "/uploadLog") and ENABLE_FILESYSTEM_ACCESS:
             self._upload_logs()
+        elif request.path == WEBROOT + "/replay" and ENABLE_FILESYSTEM_ACCESS:
+            self._start_replay()
         elif request.path.startswith(WEBROOT + "/uploadAsset") & ENABLE_FILESYSTEM_ACCESS:
             content_type, options = parse_options_header(self.headers.get("Content-Type", ""))
 
@@ -299,6 +335,10 @@ if __name__ == "__main__":
     if ENABLE_FILESYSTEM_ACCESS:
         os.makedirs(LOG_DIR, exist_ok=True)
         print(f"Logs are stored in: {LOG_DIR} (override with \"--log-dir <path>\")\n")
+        if ROBOT_REPO is None:
+            print("Log replay is disabled. Pass \"--robot-repo <path>\" to enable it.\n")
+        else:
+            print(f"Log replay uses robot code from: {ROBOT_REPO}\n")
 
     # Start server
     os.chdir(ROOT)

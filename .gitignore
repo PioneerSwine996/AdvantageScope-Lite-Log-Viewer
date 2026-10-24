@@ -123,3 +123,5 @@ build/*
 *.mode1v3
 xcuserdata
 /lite/logs
+/lite/replay_worktree
+__pycache__/

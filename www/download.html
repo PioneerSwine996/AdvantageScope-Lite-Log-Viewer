@@ -37,6 +37,17 @@
     <progress min="0" max="1" hidden></progress>
     <div class="progress-details" hidden></div>
 
+    <div class="replay-bar" hidden>
+      <label title="Use the Git hash recorded in the log's metadata">
+        <input type="checkbox" id="replay-auto" checked />
+        Automatic Git hash
+      </label>
+      <input type="text" id="replay-sha" placeholder="Git hash" disabled />
+    </div>
+    <button id="replay" title="Replay selected log" hidden>
+      <img src="symbols/play.fill.svg" />
+    </button>
+
     <input type="file" id="upload-input" accept=".wpilog,.rlog,.log" multiple hidden />
     <button id="upload" title="Upload log">
       <img src="symbols/plus.svg" />

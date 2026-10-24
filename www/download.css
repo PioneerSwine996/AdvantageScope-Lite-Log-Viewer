@@ -212,3 +212,37 @@ body.lite progress,
 body.lite div.progress-details {
   width: calc(100% - 12px - 120px);
 }
+
+/* Replay controls, shown above the control bar in Lite */
+
+body.lite div.file-list {
+  bottom: 84px;
+}
+
+div.replay-bar {
+  position: absolute;
+  bottom: 46px;
+  height: 30px;
+  left: 12px;
+  right: 46px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  white-space: nowrap;
+}
+
+div.replay-bar[hidden] {
+  display: none;
+}
+
+div.replay-bar input[type="text"] {
+  flex-grow: 1;
+  min-width: 0;
+  font-family: Courier, monospace;
+}
+
+#replay {
+  bottom: 46px;
+  right: 8px;
+}

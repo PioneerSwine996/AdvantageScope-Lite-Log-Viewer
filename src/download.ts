@@ -20,6 +20,10 @@ const EXIT_BUTTON: HTMLElement = document.getElementById("exit") as HTMLElement;
 const DOWNLOAD_BUTTON: HTMLElement = document.getElementById("download") as HTMLElement;
 const UPLOAD_BUTTON: HTMLElement = document.getElementById("upload") as HTMLElement;
 const UPLOAD_INPUT: HTMLInputElement = document.getElementById("upload-input") as HTMLInputElement;
+const REPLAY_BAR: HTMLElement = document.getElementsByClassName("replay-bar")[0] as HTMLElement;
+const REPLAY_AUTO: HTMLInputElement = document.getElementById("replay-auto") as HTMLInputElement;
+const REPLAY_SHA: HTMLInputElement = document.getElementById("replay-sha") as HTMLInputElement;
+const REPLAY_BUTTON: HTMLElement = document.getElementById("replay") as HTMLElement;
 
 const FILE_ITEM_HEIGHT_PX = 25;
 const BOTTOM_FILLER_MARGIN_PX = 5;
@@ -367,6 +371,64 @@ function upload() {
   request.send(formData);
 }
 
+/** Shows a non-error message in the control bar (Lite only). */
+function showStatus(text: string) {
+  PROGRESS_BAR.hidden = true;
+  PROGRESS_DETAILS.hidden = true;
+  ALERT_TEXT.hidden = false;
+  ALERT_TEXT.title = text;
+  ALERT_TEXT.innerText = text;
+
+  // Leave false so the message survives the next list refresh
+  alertIsError = false;
+}
+
+/**
+ * Starts replaying the selected log on the server (Lite only). The output log is
+ * written next to the original with a "_sim" suffix, so it appears in the list.
+ */
+async function replay() {
+  if (selectedFiles.length !== 1 || !selectedFiles[0].endsWith(".wpilog")) {
+    alert("Please select one WPILOG file to replay.");
+    return;
+  }
+  let sha: string | null = REPLAY_AUTO.checked ? null : REPLAY_SHA.value.trim();
+  if (sha === "") {
+    alert('Please enter a Git hash, or check "Automatic Git hash".');
+    return;
+  }
+
+  try {
+    let response = await fetch("../replay", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: selectedFiles[0], sha: sha })
+    });
+    if (!response.ok) {
+      showStatus("Replay failed" + (response.statusText.length > 0 ? ": " + response.statusText : ""));
+      return;
+    }
+  } catch (e) {
+    showStatus("Replay failed: " + String(e));
+    return;
+  }
+  pollReplay();
+}
+
+/** Shows replay progress until it finishes. */
+function pollReplay() {
+  let interval = window.setInterval(async () => {
+    let status: { state: string; message: string };
+    try {
+      status = await (await fetch("../replayStatus")).json();
+    } catch (e) {
+      return; // Try again on the next interval
+    }
+    showStatus(status.message);
+    if (status.state !== "running") window.clearInterval(interval);
+  }, 1000);
+}
+
 // Bind events
 window.addEventListener("resize", updateFiller);
 EXIT_BUTTON.addEventListener("click", () => {
@@ -375,8 +437,13 @@ EXIT_BUTTON.addEventListener("click", () => {
 DOWNLOAD_BUTTON.addEventListener("click", save);
 UPLOAD_BUTTON.addEventListener("click", () => UPLOAD_INPUT.click());
 UPLOAD_INPUT.addEventListener("change", upload);
+REPLAY_AUTO.addEventListener("change", () => {
+  REPLAY_SHA.disabled = REPLAY_AUTO.checked;
+  if (!REPLAY_SHA.disabled) REPLAY_SHA.focus();
+});
+REPLAY_BUTTON.addEventListener("click", replay);
 window.addEventListener("keydown", (event) => {
-  if (event.code === "Enter") {
+  if (event.code === "Enter" && event.target !== REPLAY_SHA) {
     save();
   } else if (!IS_LITE && event.key === "a" && (platform === "darwin" ? event.metaKey : event.ctrlKey)) {
     if (filenames.length === selectedFiles.length) {
@@ -402,5 +469,17 @@ window.addEventListener("load", () => {
 
   // Uploads require the Lite server, so hide the button everywhere else
   UPLOAD_BUTTON.hidden = !IS_LITE;
-  if (IS_LITE) document.body.classList.add("lite");
+  REPLAY_BAR.hidden = !IS_LITE;
+  REPLAY_BUTTON.hidden = !IS_LITE;
+  if (IS_LITE) {
+    document.body.classList.add("lite");
+
+    // Resume showing progress if a replay was started before the popup opened
+    fetch("../replayStatus")
+      .then((response) => response.json())
+      .then((status) => {
+        if (status.state === "running") pollReplay();
+      })
+      .catch(() => {});
+  }
 });
