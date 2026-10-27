@@ -102,6 +102,16 @@ try:
     check("dotfile rejected", post(".hidden.wpilog")[0], 400)
     check("list shows upload", "match_01.wpilog" in get("/logs"), True)
     check("file served", len(get("/logs/match_01.wpilog?folder=/etc")), 5000)
+    with urllib.request.urlopen(f"http://127.0.0.1:{PORT}/logs/match_01.wpilog") as response:
+        etag = response.headers["ETag"]
+    revalidate = urllib.request.Request(
+        f"http://127.0.0.1:{PORT}/logs/match_01.wpilog", headers={"If-None-Match": etag}
+    )
+    try:
+        urllib.request.urlopen(revalidate)
+        check("unchanged log not resent", 200, 304)
+    except urllib.error.HTTPError as error:
+        check("unchanged log not resent", error.code, 304)
     check("served path cannot escape", get("/logs/..%2F..%2Fetc%2Fpasswd.log"), None)
     check("missing file rejected", post("", field="nofile")[0], 400)
 

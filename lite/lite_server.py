@@ -77,6 +77,23 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
         self.wfile.write(data)
 
+    def _send_cached_file(self, path, mimetype):
+        """Sends a file that browsers keep and revalidate with its ETag, so unchanged files aren't downloaded again."""
+        stat = os.stat(path)
+        etag = f'"{stat.st_mtime_ns:x}-{stat.st_size:x}"'
+        cache_headers = {"ETag": etag, "Cache-Control": "no-cache"}
+        if self.headers.get("If-None-Match") == etag:
+            self.send_response(304)
+            for name, value in cache_headers.items():
+                self.send_header(name, value)
+            self.end_headers()
+            return
+        try:
+            with open(path, "rb") as f:
+                self._send_response_with_compression(200, mimetype, f.read(), cache_headers)
+        except Exception as e:
+            self.send_error(500, f"Error serving file: {e}")
+
     def do_GET(self):
         request = urllib.parse.urlparse(self.path)
         query = urllib.parse.parse_qs(request.query)
@@ -112,25 +129,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 if not path.startswith(os.path.realpath(root) + os.sep):
                     continue  # Outside the asset folder
                 if os.path.exists(path) and os.path.isfile(path):
-                    # Browsers keep assets and revalidate with the ETag, so unchanged files aren't downloaded again
-                    stat = os.stat(path)
-                    etag = f'"{stat.st_mtime_ns:x}-{stat.st_size:x}"'
-                    cache_headers = {"ETag": etag, "Cache-Control": "no-cache"}
-                    if self.headers.get("If-None-Match") == etag:
-                        self.send_response(304)
-                        for name, value in cache_headers.items():
-                            self.send_header(name, value)
-                        self.end_headers()
-                        return
-                    try:
-                        with open(path, 'rb') as f:
-                            file_content = f.read()
-                            mimetype, _ = mimetypes.guess_type(path)
-                            if not mimetype:
-                                mimetype = 'application/octet-stream'
-                            self._send_response_with_compression(200, mimetype, file_content, cache_headers)
-                    except Exception as e:
-                        self.send_error(500, f"Error serving file: {e}")
+                    mimetype, _ = mimetypes.guess_type(path)
+                    self._send_cached_file(path, mimetype or "application/octet-stream")
                     return
             self.send_error(404, f"File not found: {request.path}")
 
@@ -176,12 +176,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 if any(filename.endswith(suffix) for suffix in ALLOWED_LOG_SUFFIXES):
                     full_path = os.path.join(LOG_DIR, filename)
                     if os.path.exists(full_path):
-                        try:
-                            with open(full_path, 'rb') as f:
-                                file_content = f.read()
-                                self._send_response_with_compression(200, "application/octet-stream", file_content)
-                        except Exception as e:
-                            self.send_error(500, f"Error serving file: {e}")
+                        self._send_cached_file(full_path, "application/octet-stream")
                         return
             self.send_error(404, f"File not found: {request.path}")
 
