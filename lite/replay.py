@@ -152,23 +152,27 @@ def _run(repo, log_path, sha):
             stderr=subprocess.STDOUT,
             text=True,
         )
-        # Keep the compiler errors or Gradle's "What went wrong" section for the failure message
+        # Keep the compiler errors or Gradle's "What went wrong" section for the failure message,
+        # falling back to the last lines. Everything is also printed to the server output.
         errors = []
+        last_lines = []
         capture_lines = 0
         for line in process.stdout:
             line = line.strip()
             if len(line) == 0:
                 continue
+            print(f"[replay] {line}", flush=True)
+            last_lines = (last_lines + [line])[-3:]
             if capture_lines > 0:
                 errors.append(line)
                 capture_lines -= 1
             if "What went wrong" in line:
                 capture_lines = 3
-            elif "error:" in line:
+            elif "error" in line.lower():
                 errors.append(line)
             _set_status("running", f"Replaying ({short_sha}): {line}")
         if process.wait() != 0:
-            _set_status("error", f"Replay failed ({short_sha}): {' | '.join(errors[:4]) or 'see server output'}")
+            _set_status("error", f"Replay failed ({short_sha}): {' | '.join(errors[:4] or last_lines)}")
             return
 
         stem, extension = os.path.splitext(os.path.basename(log_path))

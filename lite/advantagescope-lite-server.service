@@ -9,6 +9,8 @@ User=root
 WorkingDirectory=/root/Github/AdvantageScope-Lite-Log-Viewer/lite
 ExecStart=/root/Github/AdvantageScope-Lite-Log-Viewer/lite/venv/bin/python lite_server.py --enable-file-access --robot-repo /root/Github/2026-RobotCode-955
 Environment=PYTHONUNBUFFERED=1
+# Log replay runs Gradle, which needs JDK 17 (temurin-17-jdk from packages.adoptium.net)
+Environment=JAVA_HOME=/usr/lib/jvm/temurin-17-jdk-amd64
 Restart=always
 RestartSec=5
 

@@ -48,9 +48,14 @@ ROBOT_REPO = parse_arg(sys.argv, "--robot-repo")
 if ROBOT_REPO is not None:
     ROBOT_REPO = os.path.abspath(ROBOT_REPO)
 
+# Asset folders, highest priority first. The robot repository's assets (e.g. its robot model) are included.
+ASSET_ROOTS = [EXTRA_ASSETS_PATH, BUNDLED_ASSETS_PATH]
+if ROBOT_REPO is not None:
+    ASSET_ROOTS.insert(1, os.path.join(ROBOT_REPO, "advantagescope_assets"))
+
 
 class Handler(http.server.SimpleHTTPRequestHandler):
-    def _send_response_with_compression(self, status_code, content_type, source_data):
+    def _send_response_with_compression(self, status_code, content_type, source_data, headers=None):
         """Sends a response, compressing it with gzip if the client supports it."""
         use_gzip = "gzip" in self.headers.get("Accept-Encoding", "")
 
@@ -66,6 +71,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Content-Length", str(content_length))
         if use_gzip:
             self.send_header("Content-Encoding", "gzip")
+        for name, value in (headers or {}).items():
+            self.send_header(name, value)
         self.end_headers()
 
         self.wfile.write(data)
@@ -81,7 +88,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         # Serve list of asset files
         elif request.path == WEBROOT + "/assets" or request.path == WEBROOT + "/assets/":
             asset_file_list = {}
-            for root in [BUNDLED_ASSETS_PATH, EXTRA_ASSETS_PATH]:
+            for root in reversed(ASSET_ROOTS):  # Higher priority roots are listed last so their configs win
                 for dirpath, _, filenames in os.walk(root):
                     for filename in filenames:
                         if not filename.startswith("."):
@@ -99,18 +106,29 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
         # Serve asset files (bundled or extra)
         elif request.path.startswith(WEBROOT + "/assets"):
-            asset_path = urllib.parse.unquote(self.path[len(WEBROOT + "/assets/"):])
-            extra_asset_path = os.path.join(EXTRA_ASSETS_PATH, asset_path)
-            bundled_asset_path = os.path.join(BUNDLED_ASSETS_PATH, asset_path)
-            for path in [extra_asset_path, bundled_asset_path]:
+            asset_path = urllib.parse.unquote(request.path[len(WEBROOT + "/assets/"):])
+            for root in ASSET_ROOTS:
+                path = os.path.realpath(os.path.join(root, asset_path))
+                if not path.startswith(os.path.realpath(root) + os.sep):
+                    continue  # Outside the asset folder
                 if os.path.exists(path) and os.path.isfile(path):
+                    # Browsers keep assets and revalidate with the ETag, so unchanged files aren't downloaded again
+                    stat = os.stat(path)
+                    etag = f'"{stat.st_mtime_ns:x}-{stat.st_size:x}"'
+                    cache_headers = {"ETag": etag, "Cache-Control": "no-cache"}
+                    if self.headers.get("If-None-Match") == etag:
+                        self.send_response(304)
+                        for name, value in cache_headers.items():
+                            self.send_header(name, value)
+                        self.end_headers()
+                        return
                     try:
                         with open(path, 'rb') as f:
                             file_content = f.read()
                             mimetype, _ = mimetypes.guess_type(path)
                             if not mimetype:
                                 mimetype = 'application/octet-stream'
-                            self._send_response_with_compression(200, mimetype, file_content)
+                            self._send_response_with_compression(200, mimetype, file_content, cache_headers)
                     except Exception as e:
                         self.send_error(500, f"Error serving file: {e}")
                     return

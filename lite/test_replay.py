@@ -97,9 +97,13 @@ os.makedirs(REPO_DIR)
 with open(os.path.join(REPO_DIR, "gradlew"), "w") as f:
     f.write(
         '#!/bin/sh\n[ "$1" = runReplay ] && [ "$REPLAYENABLED" = 1 ] || exit 1\n'
+        'case "$AKIT_LOG_PATH" in *nojava*) echo "ERROR: JAVA_HOME is not set"; exit 1;; esac\n'
         'echo "> Task :simulateJava"\ncp "$AKIT_LOG_PATH" "${AKIT_LOG_PATH%.wpilog}_sim.wpilog"\n'
     )
 os.chmod(os.path.join(REPO_DIR, "gradlew"), 0o755)
+os.makedirs(os.path.join(REPO_DIR, "advantagescope_assets", "Robot_Test"))
+with open(os.path.join(REPO_DIR, "advantagescope_assets", "Robot_Test", "config.json"), "w") as f:
+    json.dump({"name": "Test Robot"}, f)
 LAYOUT = {"hubs": [{"state": {"tabs": []}}], "satellites": [], "version": "26.0.0"}
 with open(os.path.join(REPO_DIR, "AdvantageScope.json"), "w") as f:
     json.dump(LAYOUT, f)
@@ -110,6 +114,7 @@ SHA = git("rev-parse", "HEAD")
 
 write_wpilog(os.path.join(LOG_DIR, "match.wpilog"), {"/RealMetadata/* ProjectName": "robot", "/RealMetadata/* GitSHA": SHA})
 write_wpilog(os.path.join(LOG_DIR, "nosha.wpilog"), {"/RealMetadata/* ProjectName": "robot"})
+write_wpilog(os.path.join(LOG_DIR, "nojava.wpilog"), {"/RealMetadata/* GitSHA": SHA})
 
 # Run a copy of the server on the test port, with replay.py importable and its
 # worktree created inside the temp folder
@@ -130,6 +135,20 @@ time.sleep(1.5)
 try:
     check("layout served from repo", request("/robotLayout"), (200, LAYOUT))
 
+    check("robot asset listed", request("/assets")[1].get("Robot_Test/config.json"), {"name": "Test Robot"})
+    with urllib.request.urlopen(f"http://127.0.0.1:{PORT}/assets/Robot_Test/config.json") as response:
+        etag = response.headers["ETag"]
+        check("robot asset served", json.loads(response.read()), {"name": "Test Robot"})
+    revalidate = urllib.request.Request(
+        f"http://127.0.0.1:{PORT}/assets/Robot_Test/config.json", headers={"If-None-Match": etag}
+    )
+    try:
+        urllib.request.urlopen(revalidate)
+        check("unchanged asset not resent", "200", 304)
+    except urllib.error.HTTPError as error:
+        check("unchanged asset not resent", error.code, 304)
+    check("asset traversal blocked", request("/assets/..%2F..%2Fgradlew")[0], 404)
+
     check("idle before replay", request("/replayStatus")[1]["state"], "idle")
 
     check("automatic hash accepted", request("/replay", {"name": "match.wpilog", "sha": None})[0], 202)
@@ -146,6 +165,9 @@ try:
 
     request("/replay", {"name": "match.wpilog", "sha": "deadbeef"})
     check("unknown commit reported", wait_for_replay()["message"], "Commit deadbee not found in robot repository")
+
+    request("/replay", {"name": "nojava.wpilog", "sha": None})
+    check("gradle error reported", "JAVA_HOME is not set" in wait_for_replay()["message"], True)
 
     check("malformed hash rejected", request("/replay", {"name": "match.wpilog", "sha": "--force"})[0], 400)
     check("non-wpilog rejected", request("/replay", {"name": "match.rlog", "sha": None})[0], 400)
