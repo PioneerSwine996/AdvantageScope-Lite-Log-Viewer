@@ -264,24 +264,30 @@ function uploadLog() {
   input.click();
 }
 
-/** Applies the latest AdvantageScope layout from the robot code repository on the server. */
-async function loadRobotLayout() {
+/**
+ * Applies the latest AdvantageScope layout from the robot code repository on the server.
+ * @param silent Skip error alerts, for the automatic load on startup
+ */
+async function loadRobotLayout(silent = false) {
+  let fail = (reason: string) => {
+    if (!silent) window.alert("Failed to load robot layout: " + reason);
+  };
   let layout: any;
   try {
     let response = await fetch("robotLayout");
     if (!response.ok) {
-      window.alert("Failed to load robot layout: " + response.statusText);
+      fail(response.statusText);
       return;
     }
     layout = await response.json();
   } catch (e) {
-    window.alert("Failed to load robot layout: " + String(e));
+    fail(String(e));
     return;
   }
 
   // Lite has a single hub, so only the first hub window's state applies
   if (!Array.isArray(layout?.hubs) || layout.hubs.length === 0 || !("state" in layout.hubs[0])) {
-    window.alert("Failed to load robot layout: The layout file was not a recognized format.");
+    fail("The layout file was not a recognized format.");
     return;
   }
   sendMessage(hubPort, "restore-state", layout.hubs[0].state);
@@ -344,6 +350,9 @@ async function initHub() {
   }
   if (state !== null) sendMessage(hubPort, "restore-state", state);
   sendMessage(hubPort, "show-when-ready");
+
+  // Replace the saved layout with the robot's once the server has fetched it (not awaited, since it runs git fetch)
+  if (DISTRIBUTION !== Distribution.LiteDS) loadRobotLayout(true);
 
   // Add cursor event handlers
   HUB_FRAME.contentWindow?.addEventListener("contextmenu", (event) => {

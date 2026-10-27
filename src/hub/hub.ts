@@ -294,8 +294,9 @@ window.requestAnimationFrame(periodic);
 // DATA SOURCE HANDLING
 
 function checkLiveAutoStart() {
-  if (IS_LITE && window.preferences !== null && !liveAutoStartComplete) {
-    startLive(DISTRIBUTION === Distribution.LiteDS ? "ds" : "robot");
+  // Only LiteDS connects on startup, since the Lite server is a log viewer rather than the robot
+  if (DISTRIBUTION === Distribution.LiteDS && window.preferences !== null && !liveAutoStartComplete) {
+    startLive("ds");
     liveAutoStartComplete = true;
   }
 }

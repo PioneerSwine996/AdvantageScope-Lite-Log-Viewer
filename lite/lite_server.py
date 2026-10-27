@@ -356,6 +356,7 @@ if __name__ == "__main__":
     httpd = socketserver.ThreadingTCPServer(("", PORT), Handler, bind_and_activate=False)
     httpd.allow_reuse_address = True
     httpd.daemon_threads = True
+    httpd.request_queue_size = 128  # The default of 5 drops connections when a page loads many textures at once
     print(f"Serving AdvantageScope Lite on port {PORT}: http://localhost:{PORT}{WEBROOT}")
     try:
         httpd.server_bind()
