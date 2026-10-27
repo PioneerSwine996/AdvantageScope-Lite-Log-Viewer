@@ -1,0 +1,16 @@
+[Unit]
+Description=AdvantageScope Lite Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/Github/AdvantageScope-Lite-Log-Viewer/lite
+ExecStart=/root/Github/AdvantageScope-Lite-Log-Viewer/lite/venv/bin/python lite_server.py --enable-file-access --robot-repo /root/Github/2026-RobotCode-955
+Environment=PYTHONUNBUFFERED=1
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
